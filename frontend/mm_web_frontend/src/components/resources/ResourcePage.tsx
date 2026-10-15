@@ -3,7 +3,7 @@ import { api, type PageResult } from '../../api'
 import { endpointLabel, type FieldSpec, type ResourceSpec } from '../../data'
 import { currency, displayValue, errorMessage, prettyDate, titleCase } from '../../utils'
 import type { Notice, Profile, Row } from '../../types'
-import { ConfirmDialog, DetailsDialog, EmptyState, Icon, InlineError, LoadingRows, Modal, StatusPill } from '../common'
+import { ConfirmDialog, DetailsDialog, EmptyState, Icon, InlineError, LoadingRows, Modal, PageHeading, StatusPill } from '../common'
 
 export function ResourcePage({ resource, onNotify }: { resource: ResourceSpec; onNotify: (message: string, kind?: Notice['kind']) => void }) {
   const [result, setResult] = useState<PageResult<Row> | null>(null)
@@ -161,9 +161,7 @@ export function ResourcePage({ resource, onNotify }: { resource: ResourceSpec; o
 function StockAdjustmentDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () => void; onSubmit: (body: Record<string, unknown>) => Promise<void> }) {
   const [stores, setStores] = useState<Row[]>([])
   const [products, setProducts] = useState<Row[]>([])
-  const [employees, setEmployees] = useState<Row[]>([])
   const [storeId, setStoreId] = useState('')
-  const [employeeId, setEmployeeId] = useState('')
   const [productId, setProductId] = useState('')
   const [quantityDelta, setQuantityDelta] = useState('')
   const [movementType, setMovementType] = useState('adjustment')
@@ -175,11 +173,9 @@ function StockAdjustmentDialog({ busy, onClose, onSubmit }: { busy: boolean; onC
     void Promise.all([
       api.list<Row>('stores', { limit: 100, sort: 'name', order: 'asc' }),
       api.list<Row>('products', { limit: 100, sort: 'name', order: 'asc' }),
-      api.list<Row>('employees', { limit: 100, sort: 'first_name', order: 'asc', employment_status: 'active' }),
-    ]).then(([storeResult, productResult, employeeResult]) => {
+    ]).then(([storeResult, productResult]) => {
       setStores(storeResult.data)
       setProducts(productResult.data)
-      setEmployees(employeeResult.data)
     }).catch((err: unknown) => setError(errorMessage(err)))
   }, [])
 
@@ -262,7 +258,7 @@ function SaleDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () =>
   return <Modal title="Record a sale" subtitle="The sale will update stock, payment records, finance, and the audit trail together." onClose={onClose}>
     <form className="resource-form" onSubmit={(event) => void submit(event)}>
       <label className="field-label"><span>Store *</span><select value={storeId} onChange={(event) => setStoreId(event.target.value)} required><option value="">Select a store…</option>{stores.map((store) => <option key={store.id} value={store.id}>{optionLabel(store)}</option>)}</select></label>
-      <label className="field-label"><span>Cashier / employee</span><select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}><option value="">Not assigned</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.first_name} {employee.last_name} · {employee.employee_number}</option>)}</select></label>
+      <label className="field-label"><span>Cashier / employee</span><select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}><option value="">Not assigned</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{displayValue(employee.first_name)} {displayValue(employee.last_name)} · {displayValue(employee.employee_number)}</option>)}</select></label>
       <label className="field-label"><span>Receipt number *</span><input value={receipt} onChange={(event) => setReceipt(event.target.value)} maxLength={80} required /></label>
       <div className="sale-lines"><div className="panel-heading"><div><h2>Items</h2><p>Prices are taken from the company catalog.</p></div><button type="button" className="button button-secondary button-compact" onClick={() => setLines((current) => [...current, { productId: '', quantity: '1' }])}>Add line</button></div>
         {lines.map((line, index) => <div className="sale-line" key={index}><label className="field-label"><span>Product *</span><select value={line.productId} onChange={(event) => setLines((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, productId: event.target.value } : item))} required><option value="">Select a product…</option>{products.map((product) => <option key={product.id} value={product.id}>{optionLabel(product)} · {currency(product.price)}</option>)}</select></label><label className="field-label"><span>Qty *</span><input type="number" min="1" step="1" value={line.quantity} onChange={(event) => setLines((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, quantity: event.target.value } : item))} required /></label>{lines.length > 1 && <button type="button" className="icon-button danger-quiet" aria-label="Remove sale line" onClick={() => setLines((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Icon name="trash" /></button>}</div>)}

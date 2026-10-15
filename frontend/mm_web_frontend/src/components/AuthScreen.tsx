@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { api, type SessionData } from '../api'
 import { errorMessage } from '../utils'
 import type { Notice } from '../types'
+import { Icon } from './common'
 
 export function AuthScreen({ onSignedIn, sessionData, onDismissToken, notice, onNotice, onDismissNotice }: { onSignedIn: (session: SessionData) => Promise<void>; sessionData: SessionData | null; onDismissToken: () => void; notice: Notice | null; onNotice: (message: string, kind?: Notice['kind']) => void; onDismissNotice: () => void }) {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'reset'>('login')

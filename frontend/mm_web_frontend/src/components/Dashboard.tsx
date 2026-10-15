@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api } from '../api'
 import { currency, displayValue, errorMessage, prettyDate } from '../utils'
 import type { Company, Profile, Row } from '../types'
