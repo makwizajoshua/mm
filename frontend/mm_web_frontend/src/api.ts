@@ -1,6 +1,8 @@
 const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
 const ACCESS_KEY = 'marketmesh.access'
 const REFRESH_KEY = 'marketmesh.refresh'
+const TENANT_KEY = 'marketmesh.tenant'
+const CURRENCY_KEY = 'marketmesh.currency'
 
 export interface PageResult<T> {
   data: T[]
@@ -30,6 +32,8 @@ class ApiClient {
     if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
     const accessToken = localStorage.getItem(ACCESS_KEY)
     if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+    const tenantId = localStorage.getItem(TENANT_KEY)
+    if (tenantId) headers.set('X-Tenant-Id', tenantId)
     let response: Response
     try {
       response = await fetch(`${API_BASE}${path.startsWith('/') ? path : `/${path}`}`, { ...options, headers })
@@ -62,10 +66,10 @@ class ApiClient {
     return result
   }
 
-  async register(username: string, email: string, password: string) {
+  async register(username: string, email: string, password: string, companyName: string, companyCurrency = 'MWK') {
     const result = await this.request<SessionData>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ username, email, password }),
+      body: JSON.stringify({ username, email, password, companyName, companyCurrency }),
     })
     this.saveSession(result)
     return result
@@ -108,6 +112,27 @@ class ApiClient {
   clearSession() {
     localStorage.removeItem(ACCESS_KEY)
     localStorage.removeItem(REFRESH_KEY)
+    localStorage.removeItem(TENANT_KEY)
+    localStorage.removeItem(CURRENCY_KEY)
+  }
+
+  setActiveTenant(tenantId: number | null, currency = 'MWK') {
+    if (tenantId === null) {
+      localStorage.removeItem(TENANT_KEY)
+      localStorage.removeItem(CURRENCY_KEY)
+    } else {
+      localStorage.setItem(TENANT_KEY, String(tenantId))
+      localStorage.setItem(CURRENCY_KEY, currency)
+    }
+  }
+
+  get activeTenantId() {
+    const tenantId = Number(localStorage.getItem(TENANT_KEY))
+    return Number.isSafeInteger(tenantId) && tenantId > 0 ? tenantId : null
+  }
+
+  get activeCurrency() {
+    return localStorage.getItem(CURRENCY_KEY) || 'MWK'
   }
 
   list<T>(endpoint: string, params: Record<string, string | number | undefined> = {}) {
