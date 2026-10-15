@@ -19,13 +19,17 @@ interface UserRow {
 
 export default class AuthController {
     async register(req: Request, res: Response): Promise<void> {
-        const { username, email, password } = req.body ?? {};
+        const { username, email, password, companyName } = req.body ?? {};
+        const companyCurrency = typeof req.body?.companyCurrency === 'string'
+            ? req.body.companyCurrency.toUpperCase() : 'MWK';
         if (typeof username !== 'string' || typeof email !== 'string' ||
             typeof password !== 'string' || !username.trim() || !email.trim() ||
+            typeof companyName !== 'string' || !companyName.trim() || companyName.trim().length > 100 ||
+            !/^[A-Z]{3}$/.test(companyCurrency) ||
             username.trim().length > 50 || email.trim().length > 100 ||
             password.length < 8) {
             res.status(400).json({
-                message: 'Username, email, and a password of at least 8 characters are required',
+                message: 'Company name, username, email, and a password of at least 8 characters are required',
             });
             return;
         }
@@ -42,6 +46,20 @@ export default class AuthController {
             );
             const user = result.rows[0];
             if (!user) throw new Error('User insert did not return a user');
+            const tenantResult = await client.query<{ id: number }>(
+                'INSERT INTO tenants (name, currency) VALUES ($1, $2) RETURNING id',
+                [companyName.trim(), companyCurrency],
+            );
+            const tenant = tenantResult.rows[0];
+            if (!tenant) throw new Error('Company insert did not return a company');
+            await client.query(
+                'INSERT INTO user_tenants (user_id, tenant_id) VALUES ($1, $2)',
+                [user.id, tenant.id],
+            );
+            await client.query(
+                'INSERT INTO admins (user_id, tenant_id) VALUES ($1, $2)',
+                [user.id, tenant.id],
+            );
             const session = await issueSession(client, user);
             const verificationToken = await createOneTimeToken(
                 client, 'email_verification_tokens', user.id,
@@ -55,7 +73,7 @@ export default class AuthController {
         } catch (error) {
             await client.query('ROLLBACK');
             if (getPostgresCode(error) === '23505') {
-                res.status(409).json({ message: 'Username or email is already in use' });
+                res.status(409).json({ message: 'Username, email, or company name is already in use' });
                 return;
             }
             console.error('Registration error:', error);

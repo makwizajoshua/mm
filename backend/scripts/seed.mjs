@@ -9,30 +9,12 @@ if (!process.env.DATABASE_URL) {
   console.error('Set DATABASE_URL to your local development database before seeding.')
   process.exit(1)
 }
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
 async function one(client, query, values = []) {
   const result = await client.query(query, values)
   if (!result.rows[0]) throw new Error('Seed operation did not return a database row.')
   return result.rows[0]
-}
-
-async function named(client, table, name) {
-  const returned = await client.query(
-    `INSERT INTO ${table} (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id`,
-    [name],
-  )
-  if (returned.rows[0]) return returned.rows[0].id
-  return one(client, `SELECT id FROM ${table} WHERE name = $1`, [name]).then((row) => row.id)
-}
-
-async function linked(client, table, leftKey, leftId, rightKey, rightId) {
-  await client.query(
-    `INSERT INTO ${table} (${leftKey}, ${rightKey}) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-    [leftId, rightId],
-  )
 }
 
 const client = await pool.connect()
@@ -47,40 +29,57 @@ try {
     RETURNING id
   `, [username, email.toLowerCase(), passwordHash])
 
-  const tenantId = await named(client, 'tenants', 'Northstar Market Co.')
-  const ownerRoleId = await named(client, 'roles', 'Workspace owner')
-  const managerRoleId = await named(client, 'roles', 'Store manager')
-  const permissionIds = []
-  for (const name of ['catalog:read', 'catalog:write', 'orders:manage', 'inventory:manage', 'users:manage']) {
-    permissionIds.push(await named(client, 'permissions', name))
-  }
+  const tenant = await one(client, `
+    INSERT INTO tenants (name, currency) VALUES ('Northstar Market Co.', 'USD')
+    ON CONFLICT (name) DO UPDATE SET currency = EXCLUDED.currency RETURNING id
+  `)
+  const tenantId = tenant.id
+  await client.query('INSERT INTO user_tenants (user_id, tenant_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [user.id, tenantId])
+  await client.query('INSERT INTO admins (user_id, tenant_id) VALUES ($1, $2) ON CONFLICT (user_id, tenant_id) DO NOTHING', [user.id, tenantId])
 
-  await linked(client, 'user_roles', 'user_id', user.id, 'role_id', ownerRoleId)
-  await linked(client, 'user_roles', 'user_id', user.id, 'role_id', managerRoleId)
-  await linked(client, 'user_tenants', 'user_id', user.id, 'tenant_id', tenantId)
-  for (const permissionId of permissionIds) {
-    await linked(client, 'user_permissions', 'user_id', user.id, 'permission_id', permissionId)
-  }
-  await client.query(
-    'INSERT INTO admins (user_id, tenant_id) VALUES ($1, $2) ON CONFLICT (user_id, tenant_id) DO NOTHING',
-    [user.id, tenantId],
-  )
-
-  const marketId = await one(client, `
+  const market = await one(client, `
     INSERT INTO markets (tenant_id, name) VALUES ($1, 'Pacific Northwest')
     ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name RETURNING id
-  `, [tenantId]).then((row) => row.id)
-  const downtownStoreId = await one(client, `
-    INSERT INTO stores (market_id, name, location, longitude, latitude)
-    VALUES ($1, 'Pioneer Square', '101 First Avenue, Seattle, WA', -122.3345, 47.6026)
-    ON CONFLICT (market_id, name) DO UPDATE SET location = EXCLUDED.location RETURNING id
-  `, [marketId]).then((row) => row.id)
-  const fremontStoreId = await one(client, `
-    INSERT INTO stores (market_id, name, location, longitude, latitude)
-    VALUES ($1, 'Fremont Market', '3501 Fremont Avenue N, Seattle, WA', -122.3500, 47.6510)
-    ON CONFLICT (market_id, name) DO UPDATE SET location = EXCLUDED.location RETURNING id
-  `, [marketId]).then((row) => row.id)
-  await linked(client, 'user_markets', 'user_id', user.id, 'market_id', marketId)
+  `, [tenantId])
+
+  const locationIds = []
+  for (const location of [
+    ['Pioneer Square', '101 First Avenue', 'Seattle', 'WA', '98104', 'US', 47.6026, -122.3345],
+    ['Fremont', '3501 Fremont Avenue N', 'Seattle', 'WA', '98103', 'US', 47.6510, -122.3500],
+  ]) {
+    locationIds.push(await one(client, `
+      INSERT INTO locations (tenant_id, name, address_line1, city, region, postal_code, country_code, latitude, longitude)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (tenant_id, name) DO UPDATE SET address_line1 = EXCLUDED.address_line1
+      RETURNING id
+    `, [tenantId, ...location]).then((row) => row.id))
+  }
+
+  const stores = []
+  for (const [code, name, locationId] of [
+    ['SEA-001', 'Pioneer Square Store', locationIds[0]],
+    ['SEA-002', 'Fremont Market Store', locationIds[1]],
+  ]) {
+    stores.push(await one(client, `
+      INSERT INTO stores (tenant_id, market_id, location_id, name, store_code)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (tenant_id, store_code) DO UPDATE SET location_id = EXCLUDED.location_id, name = EXCLUDED.name
+      RETURNING id
+    `, [tenantId, market.id, locationId, name, code]).then((row) => row.id))
+  }
+
+  const employee = await one(client, `
+    INSERT INTO employees (tenant_id, employee_number, first_name, last_name, job_title)
+    VALUES ($1, 'EMP-001', 'Jamie', 'Morgan', 'Store manager')
+    ON CONFLICT (tenant_id, employee_number) DO UPDATE SET job_title = EXCLUDED.job_title
+    RETURNING id
+  `, [tenantId])
+  for (const storeId of stores) {
+    await client.query(`
+      INSERT INTO employee_stores (employee_id, store_id, tenant_id) VALUES ($1, $2, $3)
+      ON CONFLICT DO NOTHING
+    `, [employee.id, storeId, tenantId])
+  }
 
   const catalog = [
     ['Everyday Tote', 'Recycled cotton carryall with reinforced handles.', 24.00],
@@ -98,69 +97,78 @@ try {
       RETURNING id
     `, [tenantId, name, description, price]).then((row) => row.id))
   }
-  const categoryIds = []
+
+  const categories = []
   for (const name of ['Bags & totes', 'Stationery', 'Drinkware', 'Coffee & tea']) {
-    categoryIds.push(await one(client, `
+    categories.push(await one(client, `
       INSERT INTO categories (tenant_id, name) VALUES ($1, $2)
       ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name RETURNING id
     `, [tenantId, name]).then((row) => row.id))
   }
-  for (const [productIndex, categoryIndexes] of [[0, [0]], [1, [1]], [2, [2]], [3, [0]], [4, [3]], [5, [2]]]) {
-    for (const categoryIndex of categoryIndexes) {
-      await linked(client, 'product_categories', 'product_id', products[productIndex], 'category_id', categoryIds[categoryIndex])
-    }
-  }
-
-  const inventory = [
-    [downtownStoreId, products[0], 18], [downtownStoreId, products[1], 4],
-    [downtownStoreId, products[2], 12], [downtownStoreId, products[4], 0],
-    [fremontStoreId, products[0], 6], [fremontStoreId, products[2], 3],
-    [fremontStoreId, products[3], 22], [fremontStoreId, products[5], 9],
-  ]
-  for (const [storeId, productId, quantity] of inventory) {
+  for (const [productIndex, categoryIndex] of [[0, 0], [1, 1], [2, 2], [3, 0], [4, 3], [5, 2]]) {
     await client.query(`
-      INSERT INTO stock_items (store_id, product_id, quantity) VALUES ($1, $2, $3)
-      ON CONFLICT (store_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity
-    `, [storeId, productId, quantity])
+      INSERT INTO product_categories (tenant_id, product_id, category_id) VALUES ($1, $2, $3)
+      ON CONFLICT (product_id, category_id) DO NOTHING
+    `, [tenantId, products[productIndex], categories[categoryIndex]])
   }
 
-  const hasOrders = await client.query('SELECT 1 FROM orders WHERE user_id = $1 LIMIT 1', [user.id])
-  if (!hasOrders.rowCount) {
-    const orderFixtures = [
-      { storeId: downtownStoreId, status: 'completed', items: [[0, 2], [1, 1]] },
-      { storeId: fremontStoreId, status: 'processing', items: [[2, 1], [3, 1]] },
-      { storeId: downtownStoreId, status: 'pending', items: [[4, 1]] },
-      { storeId: fremontStoreId, status: 'completed', items: [[5, 2]] },
+  const stockLevels = [
+    [stores[0], products[0], 18], [stores[0], products[1], 4], [stores[0], products[2], 12], [stores[0], products[4], 2],
+    [stores[1], products[0], 6], [stores[1], products[2], 3], [stores[1], products[3], 22], [stores[1], products[5], 9],
+  ]
+  for (const [storeId, productId, quantity] of stockLevels) {
+    await client.query(`
+      INSERT INTO stock_items (tenant_id, store_id, product_id, quantity) VALUES ($1, $2, $3, $4)
+      ON CONFLICT (store_id, product_id) DO NOTHING
+    `, [tenantId, storeId, productId, quantity])
+  }
+
+  const existingSales = await client.query('SELECT 1 FROM orders WHERE tenant_id = $1 LIMIT 1', [tenantId])
+  if (!existingSales.rowCount) {
+    const fixtures = [
+      { store: stores[0], receipt: 'DEMO-1001', items: [[0, 2], [1, 1]] },
+      { store: stores[1], receipt: 'DEMO-1002', items: [[2, 1], [3, 1]] },
+      { store: stores[0], receipt: 'DEMO-1003', items: [[4, 1]] },
+      { store: stores[1], receipt: 'DEMO-1004', items: [[5, 2]] },
     ]
-    for (const fixture of orderFixtures) {
-      const total = fixture.items.reduce((sum, [productIndex, quantity]) => {
-        const item = catalog[productIndex]
-        return sum + item[2] * quantity
-      }, 0)
-      const orderId = await one(client, `
-        INSERT INTO orders (user_id, store_id, total, status) VALUES ($1, $2, $3, $4) RETURNING id
-      `, [user.id, fixture.storeId, total, fixture.status]).then((row) => row.id)
-      for (const [productIndex, quantity] of fixture.items) {
-        await client.query(
-          'INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ($1, $2, $3, $4)',
-          [orderId, products[productIndex], quantity, catalog[productIndex][2]],
-        )
+    for (const fixture of fixtures) {
+      const total = fixture.items.reduce((sum, [index, quantity]) => sum + catalog[index][2] * quantity, 0)
+      const sale = await one(client, `
+        INSERT INTO orders (tenant_id, store_id, employee_id, receipt_number, total, status)
+        VALUES ($1, $2, $3, $4, $5, 'completed') RETURNING id
+      `, [tenantId, fixture.store, employee.id, fixture.receipt, total])
+      for (const [index, quantity] of fixture.items) {
+        const productId = products[index]
+        await client.query(`
+          INSERT INTO order_items (tenant_id, order_id, product_id, product_name, quantity, price)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `, [tenantId, sale.id, productId, catalog[index][0], quantity, catalog[index][2]])
+        await client.query(`
+          UPDATE stock_items SET quantity = quantity - $1
+          WHERE tenant_id = $2 AND store_id = $3 AND product_id = $4
+        `, [quantity, tenantId, fixture.store, productId])
+        await client.query(`
+          INSERT INTO inventory_movements (tenant_id, store_id, product_id, employee_id, order_id, movement_type, quantity_delta, note)
+          VALUES ($1, $2, $3, $4, $5, 'sale', $6, $7)
+        `, [tenantId, fixture.store, productId, employee.id, sale.id, -quantity, `Receipt ${fixture.receipt}`])
       }
+      await client.query(`
+        INSERT INTO payments (tenant_id, order_id, amount, method, status)
+        VALUES ($1, $2, $3, 'card', 'completed')
+      `, [tenantId, sale.id, total])
+      await client.query(`
+        INSERT INTO transactions (tenant_id, store_id, employee_id, order_id, recorded_by_user_id, amount, transaction_type, category, status, description)
+        VALUES ($1, $2, $3, $4, $5, $6, 'income', 'Sales', 'posted', $7)
+      `, [tenantId, fixture.store, employee.id, sale.id, user.id, total, `Sale receipt ${fixture.receipt}`])
+      await client.query(`
+        INSERT INTO audits (tenant_id, title, body, user_id, employee_id, entity_type, entity_id, action)
+        VALUES ($1, $2, $3::jsonb, $4, $5, 'sale', $6, 'create')
+      `, [tenantId, `Sale recorded: ${fixture.receipt}`, JSON.stringify({ total }), user.id, employee.id, String(sale.id)])
     }
   }
-  const hasTransactions = await client.query('SELECT 1 FROM transactions WHERE user_id = $1 LIMIT 1', [user.id])
-  if (!hasTransactions.rowCount) {
-    for (const [amount, type, status] of [[60.50, 'payment', 'completed'], [50.00, 'payment', 'completed'], [18.00, 'refund', 'pending']]) {
-      await client.query('INSERT INTO transactions (user_id, amount, type, status) VALUES ($1, $2, $3, $4)', [user.id, amount, type, status])
-    }
-  }
-  await client.query(`
-    INSERT INTO audits (title, body, user_id)
-    SELECT 'Demo workspace seeded', '{"source":"seed","version":1}'::jsonb, $1
-    WHERE NOT EXISTS (SELECT 1 FROM audits WHERE title = 'Demo workspace seeded' AND user_id = $1)
-  `, [user.id])
+
   await client.query('COMMIT')
-  console.log(`Seeded MarketMesh demo data for ${username} (${email}).`)
+  console.log(`Seeded MarketMesh demo company and data for ${username} (${email}).`)
 } catch (error) {
   await client.query('ROLLBACK')
   console.error('Demo data seed failed. Check the database schema and DATABASE_URL.')

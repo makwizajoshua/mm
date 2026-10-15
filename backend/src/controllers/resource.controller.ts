@@ -4,12 +4,15 @@ import dbConnection from '../db/connection';
 export interface ResourceSpec {
     table: string;
     fields: readonly string[];
+    serverManagedFields?: readonly string[];
     requiredOnCreate?: readonly string[];
     readFields?: readonly string[];
     filterFields?: readonly string[];
     searchFields?: readonly string[];
     sortableFields?: readonly string[];
     readOnly?: boolean;
+    deletionDisabled?: boolean;
+    tenantScoped?: boolean;
 }
 
 const MAX_PAGE_SIZE = 100;
@@ -47,6 +50,14 @@ export default class ResourceController {
             ? sort
             : 'id';
         const direction = req.query.order === 'asc' ? 'ASC' : 'DESC';
+        if (this.spec.tenantScoped) {
+            if (!req.tenantId) {
+                res.status(400).json({ message: 'Select a company before accessing this resource' });
+                return;
+            }
+            values.push(req.tenantId);
+            filters.push(`"tenant_id" = $${values.length}`);
+        }
         const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
         const offset = (page - 1) * limit;
         try {
@@ -76,8 +87,8 @@ export default class ResourceController {
         }
         try {
             const result = await dbConnection.query(
-                `SELECT ${this.columns()} FROM "${this.spec.table}" WHERE id = $1`,
-                [id],
+                `SELECT ${this.columns()} FROM "${this.spec.table}" WHERE id = $1${this.tenantClause(req, 2)}`,
+                this.spec.tenantScoped ? [id, req.tenantId] : [id],
             );
             if (!result.rows[0]) {
                 res.status(404).json({ message: 'Resource not found' });
@@ -90,6 +101,10 @@ export default class ResourceController {
     }
 
     async create(req: Request, res: Response): Promise<void> {
+        if (this.spec.readOnly) {
+            res.status(405).json({ message: 'This resource is read-only' });
+            return;
+        }
         const body = req.body as Record<string, unknown>;
         const validation = this.validateBody(body, true);
         if (validation) {
@@ -97,8 +112,11 @@ export default class ResourceController {
             return;
         }
 
-        const keys = Object.keys(body);
-        const values = keys.map((key) => body[key]);
+        const valuesBody = this.spec.tenantScoped
+            ? { ...body, tenant_id: req.tenantId }
+            : body;
+        const keys = Object.keys(valuesBody);
+        const values = keys.map((key) => valuesBody[key]);
         try {
             const result = await dbConnection.query(
                 `INSERT INTO "${this.spec.table}" (${keys.map((key) => `"${key}"`).join(', ')})
@@ -106,6 +124,7 @@ export default class ResourceController {
                  RETURNING ${this.columns()}`,
                 values,
             );
+            await this.recordAudit(req, 'create', result.rows[0]);
             res.status(201).json(result.rows[0]);
         } catch (error) {
             this.handleError(res, error, 'Create');
@@ -128,20 +147,28 @@ export default class ResourceController {
             res.status(400).json({ message: validation });
             return;
         }
-        const keys = Object.keys(body);
-        const values = keys.map((key) => body[key]);
+        const valuesBody = this.spec.tenantScoped
+            ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'tenant_id'))
+            : body;
+        const keys = Object.keys(valuesBody);
+        if (!keys.length) {
+            res.status(400).json({ message: 'At least one editable field is required' });
+            return;
+        }
+        const values = keys.map((key) => valuesBody[key]);
         values.push(id);
         try {
             const result = await dbConnection.query(
                 `UPDATE "${this.spec.table}"
                  SET ${keys.map((key, index) => `"${key}" = $${index + 1}`).join(', ')}
-                 WHERE id = $${values.length} RETURNING ${this.columns()}`,
-                values,
+                 WHERE id = $${values.length}${this.spec.tenantScoped ? ` AND tenant_id = $${values.length + 1}` : ''} RETURNING ${this.columns()}`,
+                this.spec.tenantScoped ? [...values, req.tenantId] : values,
             );
             if (!result.rows[0]) {
                 res.status(404).json({ message: 'Resource not found' });
                 return;
             }
+            await this.recordAudit(req, 'update', result.rows[0]);
             res.json(result.rows[0]);
         } catch (error) {
             this.handleError(res, error, 'Update');
@@ -153,6 +180,10 @@ export default class ResourceController {
             res.status(405).json({ message: 'This resource is read-only' });
             return;
         }
+        if (this.spec.deletionDisabled) {
+            res.status(405).json({ message: 'This resource cannot be deleted; change its status instead' });
+            return;
+        }
         const id = parsePositiveInteger(req.params.id, null);
         if (id === null) {
             res.status(400).json({ message: 'A valid resource id is required' });
@@ -160,13 +191,14 @@ export default class ResourceController {
         }
         try {
             const result = await dbConnection.query(
-                `DELETE FROM "${this.spec.table}" WHERE id = $1 RETURNING ${this.columns()}`,
-                [id],
+                `DELETE FROM "${this.spec.table}" WHERE id = $1${this.tenantClause(req, 2)} RETURNING ${this.columns()}`,
+                this.spec.tenantScoped ? [id, req.tenantId] : [id],
             );
             if (!result.rows[0]) {
                 res.status(404).json({ message: 'Resource not found' });
                 return;
             }
+            await this.recordAudit(req, 'delete', result.rows[0]);
             res.json({ message: 'Resource deleted', data: result.rows[0] });
         } catch (error) {
             this.handleError(res, error, 'Delete');
@@ -179,7 +211,10 @@ export default class ResourceController {
         }
         const keys = Object.keys(body);
         if (!keys.length) return 'At least one field is required';
-        const invalid = keys.find((key) => !this.spec.fields.includes(key));
+        const allowedFields = creating
+            ? [...this.spec.fields, ...(this.spec.serverManagedFields ?? [])]
+            : this.spec.fields;
+        const invalid = keys.find((key) => !allowedFields.includes(key));
         if (invalid) return `Field "${invalid}" cannot be written`;
         if (creating) {
             const missing = this.spec.requiredOnCreate?.find((key) =>
@@ -190,8 +225,27 @@ export default class ResourceController {
     }
 
     protected columns(): string {
-        return [...new Set(['id', ...this.spec.fields, ...(this.spec.readFields ?? [])])]
+        return [...new Set(['id', ...(this.spec.tenantScoped ? ['tenant_id'] : []), ...this.spec.fields, ...(this.spec.serverManagedFields ?? []), ...(this.spec.readFields ?? [])])]
             .map((field) => `"${field}"`).join(', ');
+    }
+
+    private tenantClause(req: Request, parameter: number): string {
+        if (!this.spec.tenantScoped) return '';
+        return req.tenantId ? ` AND tenant_id = $${parameter}` : ' AND FALSE';
+    }
+
+    private async recordAudit(req: Request, action: 'create' | 'update' | 'delete', row: unknown): Promise<void> {
+        if (!this.spec.tenantScoped || !req.tenantId || this.spec.table === 'audits' || !row || typeof row !== 'object') return;
+        const record = row as Record<string, unknown>;
+        try {
+            await dbConnection.query(
+                `INSERT INTO audits (tenant_id, title, body, user_id, entity_type, entity_id, action)
+                 VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)`,
+                [req.tenantId, `${this.spec.table} ${action}`, JSON.stringify(record), req.user.id, this.spec.table, String(record.id), action],
+            );
+        } catch (error) {
+            console.error(`Audit write failed for ${this.spec.table} ${action}:`, error);
+        }
     }
 
     protected handleError(res: Response, error: unknown, operation: string): void {
