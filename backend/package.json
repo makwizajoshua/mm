@@ -1,5 +1,12 @@
 {
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "seed": "node scripts/seed.mjs"
+  },
   "devDependencies": {
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
   "dependencies": {
