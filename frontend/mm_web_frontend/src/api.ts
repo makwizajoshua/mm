@@ -2,7 +2,8 @@ const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
 const ACCESS_KEY = 'marketmesh.access'
 const REFRESH_KEY = 'marketmesh.refresh'
 const TENANT_KEY = 'marketmesh.tenant'
-const CURRENCY_KEY = 'marketmesh.currency'
+
+export const SESSION_EXPIRED_EVENT = 'marketmesh:session-expired'
 
 export interface PageResult<T> {
   data: T[]
@@ -47,6 +48,8 @@ class ApiClient {
         return this.request<T>(path, options, false)
       } catch {
         this.clearSession()
+        window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+        throw apiError('Your session has expired. Please sign in again.', 401)
       }
     }
     if (!response.ok) {
@@ -66,10 +69,10 @@ class ApiClient {
     return result
   }
 
-  async register(username: string, email: string, password: string, companyName: string, companyCurrency = 'MWK') {
+  async register(username: string, email: string, password: string, companyName: string) {
     const result = await this.request<SessionData>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ username, email, password, companyName, companyCurrency }),
+      body: JSON.stringify({ username, email, password, companyName }),
     })
     this.saveSession(result)
     return result
@@ -113,26 +116,16 @@ class ApiClient {
     localStorage.removeItem(ACCESS_KEY)
     localStorage.removeItem(REFRESH_KEY)
     localStorage.removeItem(TENANT_KEY)
-    localStorage.removeItem(CURRENCY_KEY)
   }
 
-  setActiveTenant(tenantId: number | null, currency = 'MWK') {
-    if (tenantId === null) {
-      localStorage.removeItem(TENANT_KEY)
-      localStorage.removeItem(CURRENCY_KEY)
-    } else {
-      localStorage.setItem(TENANT_KEY, String(tenantId))
-      localStorage.setItem(CURRENCY_KEY, currency)
-    }
+  setActiveTenant(tenantId: number | null) {
+    if (tenantId === null) localStorage.removeItem(TENANT_KEY)
+    else localStorage.setItem(TENANT_KEY, String(tenantId))
   }
 
   get activeTenantId() {
     const tenantId = Number(localStorage.getItem(TENANT_KEY))
     return Number.isSafeInteger(tenantId) && tenantId > 0 ? tenantId : null
-  }
-
-  get activeCurrency() {
-    return localStorage.getItem(CURRENCY_KEY) || 'MWK'
   }
 
   list<T>(endpoint: string, params: Record<string, string | number | undefined> = {}) {
@@ -165,3 +158,6 @@ function apiError(message: string, status: number): ApiError {
 }
 
 export const api = new ApiClient()
+
+// Companies used to carry their own currency; drop the value an older version left in the browser.
+try { localStorage.removeItem('marketmesh.currency') } catch { /* storage unavailable */ }

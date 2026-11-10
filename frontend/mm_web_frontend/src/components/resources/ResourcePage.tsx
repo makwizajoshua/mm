@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { api, type PageResult } from '../../api'
 import { endpointLabel, type FieldSpec, type ResourceSpec } from '../../data'
 import { currency, displayValue, errorMessage, prettyDate, titleCase } from '../../utils'
 import type { Notice, Profile, Row } from '../../types'
 import { ConfirmDialog, DetailsDialog, EmptyState, Icon, InlineError, LoadingRows, Modal, PageHeading, StatusPill } from '../common'
 
-export function ResourcePage({ resource, onNotify }: { resource: ResourceSpec; onNotify: (message: string, kind?: Notice['kind']) => void }) {
+export function ResourcePage({ resource: spec, can, isOwner, onNotify }: { resource: ResourceSpec; can: (endpoint: string, kind?: 'read' | 'write') => boolean; isOwner: boolean; onNotify: (message: string, kind?: Notice['kind']) => void }) {
+  // Employees whose role cannot write here get a read-only view.
+  const resource = useMemo(() => spec.readOnly || can(spec.endpoint, 'write') ? spec : { ...spec, readOnly: true }, [spec, can])
+  const [accessFor, setAccessFor] = useState<Row | null>(null)
   const [result, setResult] = useState<PageResult<Row> | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const latestRequest = useRef(0)
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(10)
   const [sort, setSort] = useState('id')
@@ -23,19 +28,32 @@ export function ResourcePage({ resource, onNotify }: { resource: ResourceSpec; o
   const [saleOpen, setSaleOpen] = useState(false)
   const [adjustmentOpen, setAdjustmentOpen] = useState(false)
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search)
+      setPage(1)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
+
   const load = useCallback(async () => {
+    const requestId = ++latestRequest.current
     setLoading(true)
     setError('')
     try {
       const query: Record<string, string | number | undefined> = { page, limit, sort, order, ...filters }
-      if (resource.searchable && search.trim()) query.search = search.trim()
-      setResult(await api.list<Row>(resource.endpoint, query))
+      if (resource.searchable && debouncedSearch.trim()) query.search = debouncedSearch.trim()
+      const next = await api.list<Row>(resource.endpoint, query)
+      if (requestId !== latestRequest.current) return
+      const lastPage = Math.max(1, Math.ceil(next.pagination.total / limit))
+      if (page > lastPage) { setPage(lastPage); return }
+      setResult(next)
     } catch (err) {
-      setError(errorMessage(err))
+      if (requestId === latestRequest.current) setError(errorMessage(err))
     } finally {
-      setLoading(false)
+      if (requestId === latestRequest.current) setLoading(false)
     }
-  }, [filters, limit, order, page, resource.endpoint, resource.searchable, search, sort])
+  }, [debouncedSearch, filters, limit, order, page, resource.endpoint, resource.searchable, sort])
 
   useEffect(() => {
     let cancelled = false
@@ -126,16 +144,16 @@ export function ResourcePage({ resource, onNotify }: { resource: ResourceSpec; o
     <>
       <PageHeading eyebrow={resource.group.toUpperCase()} title={resource.label} subtitle={resource.description}>
         {resource.key === 'orders'
-          ? <button className="button button-primary" onClick={() => setSaleOpen(true)}><Icon name="plus" />Record sale</button>
+          ? can('sales', 'write') && <button className="button button-primary" onClick={() => setSaleOpen(true)}><Icon name="plus" />Record sale</button>
           : resource.key === 'stock-items'
-            ? <button className="button button-primary" onClick={() => setAdjustmentOpen(true)}><Icon name="plus" />Adjust stock</button>
+            ? can('stock-adjustments', 'write') && <button className="button button-primary" onClick={() => setAdjustmentOpen(true)}><Icon name="plus" />Adjust stock</button>
           : !resource.readOnly && <button className="button button-primary" onClick={() => setEditing(null)}><Icon name="plus" />Add {resource.singular.toLowerCase()}</button>}
       </PageHeading>
       <section className="panel resource-panel">
         <div className="resource-toolbar">
           <div className="toolbar-title"><b>{result?.pagination.total ?? 0}</b> records <span className="toolbar-dot">·</span> {resource.readOnly ? 'Read-only' : 'Live data'}</div>
           <div className="toolbar-controls">
-            {resource.searchable && <label className="search-control"><Icon name="search" /><input aria-label={`Search ${resource.label.toLowerCase()}`} placeholder={`Search ${resource.label.toLowerCase()}…`} value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} /></label>}
+            {resource.searchable && <label className="search-control"><Icon name="search" /><input aria-label={`Search ${resource.label.toLowerCase()}`} placeholder={`Search ${resource.label.toLowerCase()}…`} value={search} onChange={(event) => setSearch(event.target.value)} /></label>}
             {resource.filters?.map((filter) => <FilterControl key={filter} name={filter} resource={resource} value={filters[filter] ?? ''} onChange={(value) => { setFilters((current) => ({ ...current, [filter]: value })); setPage(1) }} />)}
             <button className="button button-secondary button-compact" onClick={() => void load()} disabled={loading}><Icon name="refresh" />Refresh</button>
           </div>
@@ -144,18 +162,103 @@ export function ResourcePage({ resource, onNotify }: { resource: ResourceSpec; o
         <div className="table-wrap data-table">
           {loading ? <LoadingRows /> : result?.data.length ? <table><thead><tr>{columns.map((column) => <th key={column}>{resource.sortableFields.includes(column) ? <button className="sort-button" onClick={() => toggleSort(column)}>{titleCase(column)}{sort === column && <span>{order === 'asc' ? ' ↑' : ' ↓'}</span>}</button> : titleCase(column)}</th>)}<th className="actions-heading">Actions</th></tr></thead><tbody>{result.data.map((row) => <tr key={row.id}>
             {columns.map((column) => <td key={column}>{cellFor(resource, column, row[column])}</td>)}
-          <td className="row-actions"><button className="icon-button" title="View details" onClick={() => void openDetails(row)}><Icon name="eye" /></button>{!resource.readOnly && <button className="icon-button" title={`Edit ${resource.singular}`} onClick={() => setEditing(row)}><Icon name="edit" /></button>}{!resource.readOnly && !resource.deletionDisabled && <button className="icon-button danger-quiet" title={`Delete ${resource.singular}`} onClick={() => setPendingDelete(row)}><Icon name="trash" /></button>}</td>
+          <td className="row-actions">{resource.key === 'employees' && isOwner && <button className="icon-button" title="Login and access" onClick={() => setAccessFor(row)}><Icon name="shield" /></button>}<button className="icon-button" title="View details" onClick={() => void openDetails(row)}><Icon name="eye" /></button>{!resource.readOnly && <button className="icon-button" title={`Edit ${resource.singular}`} onClick={() => setEditing(row)}><Icon name="edit" /></button>}{!resource.readOnly && !resource.deletionDisabled && <button className="icon-button danger-quiet" title={`Delete ${resource.singular}`} onClick={() => setPendingDelete(row)}><Icon name="trash" /></button>}</td>
           </tr>)}</tbody></table> : <EmptyState title={error ? 'Records could not be loaded' : 'Nothing here yet'} detail={error ? 'Retry the request, or check your access to this resource.' : `No ${resource.label.toLowerCase()} match this view.`} action={error ? 'Retry' : resource.readOnly ? undefined : `Add ${resource.singular.toLowerCase()}`} onAction={error ? () => void load() : () => setEditing(null)} />}
         </div>
         <div className="pagination"><div className="pagination-summary"><span>{result?.pagination.total ? `Showing ${(page - 1) * limit + 1}–${Math.min(page * limit, result.pagination.total)} of ${result.pagination.total}` : 'No records'}</span><label className="page-size">Rows <select value={limit} onChange={(event) => { setLimit(Number(event.target.value)); setPage(1) }}>{[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}</select></label></div><div><button className="button button-secondary button-compact" disabled={page <= 1 || loading} onClick={() => setPage((value) => value - 1)}>← Previous</button><span className="page-indicator">Page {page}{result?.pagination.total ? ` of ${Math.max(1, Math.ceil(result.pagination.total / limit))}` : ''}</span><button className="button button-secondary button-compact" disabled={loading || !result || page * limit >= result.pagination.total} onClick={() => setPage((value) => value + 1)}>Next →</button></div></div>
       </section>
       {editing !== false && <ResourceForm resource={resource} initial={editing || undefined} busy={busy} onClose={() => setEditing(false)} onSubmit={save} />}
+      {accessFor && <StaffAccessDialog employee={accessFor} onClose={() => setAccessFor(null)} onNotify={onNotify} />}
       {saleOpen && <SaleDialog busy={busy} onClose={() => setSaleOpen(false)} onSubmit={saveSale} />}
       {adjustmentOpen && <StockAdjustmentDialog busy={busy} onClose={() => setAdjustmentOpen(false)} onSubmit={saveAdjustment} />}
       {viewing && <DetailsDialog title={`${resource.singular} #${viewing.id}`} data={viewing} loading={loadingDetail} onClose={() => setViewing(null)} />}
       {pendingDelete && <ConfirmDialog title={`Delete ${resource.singular.toLowerCase()}?`} message={`This will permanently delete record #${pendingDelete.id}. This action cannot be undone.`} busy={busy} onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()} />}
     </>
   )
+}
+
+const ROLE_LABELS: Record<string, string> = { manager: 'Manager', cashier: 'Cashier (point of sale)', stock_clerk: 'Stock clerk (stock taking)', accountant: 'Accountant (finance)' }
+const COMPANY_WIDE = ['manager', 'accountant']
+
+function StaffAccessDialog({ employee, onClose, onNotify }: { employee: Row; onClose: () => void; onNotify: (message: string, kind?: Notice['kind']) => void }) {
+  const [loaded, setLoaded] = useState(false)
+  const [hasAccount, setHasAccount] = useState(false)
+  const [loginName, setLoginName] = useState('')
+  const [roles, setRoles] = useState<string[]>([])
+  const [storeIds, setStoreIds] = useState<number[]>([])
+  const [stores, setStores] = useState<Row[]>([])
+  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState(String(employee.email ?? ''))
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const base = `/employees/${employee.id}`
+
+  useEffect(() => {
+    void Promise.all([
+      api.request<{ hasAccount: boolean; username: string | null; roles: string[]; store_ids: number[] }>(`${base}/access`),
+      api.list<Row>('stores', { limit: 100, sort: 'name', order: 'asc' }),
+    ]).then(([access, storeResult]) => {
+      setHasAccount(access.hasAccount)
+      setLoginName(access.username ?? '')
+      setRoles(access.roles)
+      setStoreIds(access.store_ids)
+      setStores(storeResult.data)
+      setLoaded(true)
+    }).catch((err: unknown) => setError(errorMessage(err)))
+  }, [base])
+
+  const toggle = <T,>(list: T[], item: T) => list.includes(item) ? list.filter((value) => value !== item) : [...list, item]
+  const limited = roles.length > 0 && !roles.some((role) => COMPANY_WIDE.includes(role))
+
+  const run = async (action: () => Promise<unknown>, done: string) => {
+    setSaving(true)
+    setError('')
+    try {
+      await action()
+      onNotify(done)
+      onClose()
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+  const body = { roles, store_ids: limited ? storeIds : [] }
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!roles.length) { setError('Choose at least one role.'); return }
+    if (limited && !storeIds.length) { setError('Choose the store(s) this employee works in.'); return }
+    void run(
+      () => hasAccount
+        ? api.request(`${base}/access`, { method: 'PUT', body: JSON.stringify(body) })
+        : api.request(`${base}/account`, { method: 'POST', body: JSON.stringify({ ...body, username, email, password }) }),
+      hasAccount ? 'Access updated.' : 'Employee login created.',
+    )
+  }
+
+  return <Modal title={`Login and access · ${displayValue(employee.first_name)} ${displayValue(employee.last_name)}`} subtitle={hasAccount ? `Signs in as ${loginName}` : 'Give this employee a login so they can work from the web or the mobile app.'} onClose={onClose}>
+    <form className="resource-form" onSubmit={submit}>
+      {!loaded && !error && <p>Loading…</p>}
+      {loaded && !hasAccount && <>
+        <label className="field-label"><span>Username *</span><input value={username} onChange={(event) => setUsername(event.target.value)} maxLength={50} required /></label>
+        <label className="field-label"><span>Email *</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
+        <label className="field-label"><span>Temporary password *</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} autoComplete="new-password" required /><small className="helper-text">At least 8 characters. Share it with the employee securely.</small></label>
+      </>}
+      {loaded && <>
+        <fieldset className="field-label"><span>Roles *</span>{Object.entries(ROLE_LABELS).map(([role, label]) => <label key={role}><input type="checkbox" checked={roles.includes(role)} onChange={() => setRoles((current) => toggle(current, role))} /> {label}</label>)}</fieldset>
+        {limited
+          ? <fieldset className="field-label"><span>Stores this employee works in *</span>{stores.map((store) => <label key={store.id}><input type="checkbox" checked={storeIds.includes(store.id)} onChange={() => setStoreIds((current) => toggle(current, store.id))} /> {optionLabel(store)}</label>)}</fieldset>
+          : roles.length > 0 && <p className="helper-text">Managers and accountants work across every store.</p>}
+      </>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="form-actions">
+        {hasAccount && <button type="button" className="button button-danger-outline" disabled={saving} onClick={() => void run(() => api.request(`${base}/account`, { method: 'DELETE' }), 'Employee login removed.')}>Remove login</button>}
+        <button type="button" className="button button-secondary" onClick={onClose}>Cancel</button>
+        <button className="button button-primary" disabled={saving || !loaded}>{saving ? 'Saving…' : hasAccount ? 'Save access' : 'Create login'}</button>
+      </div>
+    </form>
+  </Modal>
 }
 
 function StockAdjustmentDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () => void; onSubmit: (body: Record<string, unknown>) => Promise<void> }) {
@@ -211,7 +314,7 @@ function SaleDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () =>
   const [employees, setEmployees] = useState<Row[]>([])
   const [storeId, setStoreId] = useState('')
   const [employeeId, setEmployeeId] = useState('')
-  const [receipt, setReceipt] = useState(`R-${Date.now()}`)
+  const [receipt, setReceipt] = useState(() => `R-${Date.now()}`)
   const [method, setMethod] = useState('cash')
   const [lines, setLines] = useState([{ productId: '', quantity: '1' }])
   const [error, setError] = useState('')
@@ -263,7 +366,7 @@ function SaleDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () =>
       <div className="sale-lines"><div className="panel-heading"><div><h2>Items</h2><p>Prices are taken from the company catalog.</p></div><button type="button" className="button button-secondary button-compact" onClick={() => setLines((current) => [...current, { productId: '', quantity: '1' }])}>Add line</button></div>
         {lines.map((line, index) => <div className="sale-line" key={index}><label className="field-label"><span>Product *</span><select value={line.productId} onChange={(event) => setLines((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, productId: event.target.value } : item))} required><option value="">Select a product…</option>{products.map((product) => <option key={product.id} value={product.id}>{optionLabel(product)} · {currency(product.price)}</option>)}</select></label><label className="field-label"><span>Qty *</span><input type="number" min="1" step="1" value={line.quantity} onChange={(event) => setLines((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, quantity: event.target.value } : item))} required /></label>{lines.length > 1 && <button type="button" className="icon-button danger-quiet" aria-label="Remove sale line" onClick={() => setLines((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Icon name="trash" /></button>}</div>)}
       </div>
-      <label className="field-label"><span>Payment method *</span><select value={method} onChange={(event) => setMethod(event.target.value)}><option value="cash">Cash</option><option value="card">Card</option><option value="mobile_money">Mobile money</option><option value="bank_transfer">Bank transfer</option></select></label>
+      <label className="field-label"><span>Payment method *</span><select value={method} onChange={(event) => setMethod(event.target.value)}><option value="cash">Cash</option><option value="airtel_money">Airtel Money</option><option value="tnm_mpamba">TNM Mpamba</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label>
       <div className="sale-total"><span>Sale total</span><strong>{currency(total)}</strong></div>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="form-actions"><button type="button" className="button button-secondary" onClick={onClose} disabled={busy}>Cancel</button><button className="button button-primary" disabled={saving || busy || stores.length === 0 || products.length === 0 || total <= 0}>{saving || busy ? 'Recording…' : 'Complete sale'}</button></div>

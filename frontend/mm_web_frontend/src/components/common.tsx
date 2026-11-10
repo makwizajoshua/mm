@@ -37,7 +37,7 @@ export function LoadingRows() {
 
 export function StatusPill({ status }: { status: string }) {
   const normalized = status.toLowerCase()
-  const tone = ['completed', 'paid', 'success', 'active'].includes(normalized) ? 'green' : ['cancelled', 'failed', 'refunded'].includes(normalized) ? 'red' : normalized === 'pending' ? 'amber' : 'blue'
+  const tone = ['completed', 'paid', 'success', 'active'].includes(normalized) ? 'green' : ['cancelled', 'failed', 'refunded', 'voided'].includes(normalized) ? 'red' : normalized === 'pending' ? 'amber' : 'blue'
   return <span className={`status-pill ${tone}`}><i />{titleCase(status)}</span>
 }
 

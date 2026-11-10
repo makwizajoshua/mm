@@ -1,20 +1,24 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { api } from '../api'
-import { currency, displayValue, errorMessage, prettyDate } from '../utils'
+import { apiBase, currency, displayValue, errorMessage, prettyDate } from '../utils'
 import type { Company, Profile, Row } from '../types'
 import { EmptyState, Icon, LoadingRows, StatusPill } from './common'
 
-export function Dashboard({ profile, onNavigate, onError }: { profile: Profile; onNavigate: (section: string) => void; onError: (message: string) => void }) {
+export function Dashboard({ profile, can, onNavigate, onError }: { profile: Profile; can: (endpoint: string) => boolean; onNavigate: (section: string) => void; onError: (message: string) => void }) {
   const [loading, setLoading] = useState(true)
   const [health, setHealth] = useState<'checking' | 'online' | 'offline'>('checking')
   const [stats, setStats] = useState({ orders: 0, sales: 0, products: 0, stock: 0, lowStock: 0, pending: 0 })
   const [latestOrders, setLatestOrders] = useState<Row[]>([])
   const [lowStockItems, setLowStockItems] = useState<Row[]>([])
+  const onErrorRef = useRef(onError)
+  useEffect(() => { onErrorRef.current = onError }, [onError])
 
   const reload = useCallback(async () => {
     setLoading(true)
     const endpoints = ['orders', 'payments', 'products', 'stock-items'] as const
-    const results = await Promise.allSettled(endpoints.map((endpoint) => api.list<Row>(endpoint, { limit: 100, sort: 'id', order: 'desc' })))
+    const empty = { data: [] as Row[], pagination: { page: 1, limit: 100, total: 0 } }
+    // Only ask for what this employee's role may read.
+    const results = await Promise.allSettled(endpoints.map((endpoint) => can(endpoint) ? api.list<Row>(endpoint, { limit: 100, sort: 'id', order: 'desc' }) : Promise.resolve(empty)))
     const failures = results.filter((result) => result.status === 'rejected')
     const records = Object.fromEntries(endpoints.map((endpoint, index) => [
       endpoint,
@@ -33,11 +37,11 @@ export function Dashboard({ profile, onNavigate, onError }: { profile: Profile; 
     })
     setLatestOrders(orders.slice(0, 5))
     setLowStockItems(inventory.filter((item) => Number(item.quantity || 0) <= 5).slice(0, 5))
-    if (failures.length) onError(`${failures.length} dashboard data source${failures.length === 1 ? '' : 's'} could not be loaded. Check access and API availability.`)
-    const healthResult = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/health`).then((response) => response.ok).catch(() => false)
+    if (failures.length) onErrorRef.current(`${failures.length} dashboard data source${failures.length === 1 ? '' : 's'} could not be loaded. Check access and API availability.`)
+    const healthResult = await fetch(`${apiBase}/health`).then((response) => response.ok).catch(() => false)
     setHealth(healthResult ? 'online' : 'offline')
     setLoading(false)
-  }, [onError])
+  }, [can])
 
   useEffect(() => {
     let cancelled = false
@@ -48,7 +52,7 @@ export function Dashboard({ profile, onNavigate, onError }: { profile: Profile; 
   return (
     <>
       <div className="welcome-row">
-        <div><div className="eyebrow">THURSDAY, {new Intl.DateTimeFormat(undefined, { month: 'long', day: 'numeric', year: 'numeric' }).format(new Date()).toUpperCase()}</div><h1>Good to see you, {profile.username}</h1><p className="page-subtitle">Here’s what’s happening across your operation today.</p></div>
+        <div><div className="eyebrow">{new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date()).toUpperCase()}</div><h1>Good to see you, {profile.username}</h1><p className="page-subtitle">Here’s what’s happening across your operation today.</p></div>
         <button className="button button-secondary" onClick={() => void reload()} disabled={loading}><Icon name="refresh" />{loading ? 'Refreshing…' : 'Refresh data'}</button>
       </div>
       <div className="overview-status"><span className={`status-dot ${health === 'offline' ? 'offline' : ''}`} />Backend {health === 'checking' ? 'checking…' : health === 'online' ? 'operational' : 'unavailable'}<span className="status-divider" />Signed in as <b>{profile.email}</b><span className="status-divider" />{profile.email_verified ? 'Email verified' : 'Email not verified'}</div>
@@ -69,7 +73,7 @@ export function Dashboard({ profile, onNavigate, onError }: { profile: Profile; 
         </section>
       </div>
       <section className="quick-actions"><div><h2>Quick access</h2><p>Jump into your most-used tools</p></div><div className="quick-action-list">
-        {[['products', 'Add product', 'box'], ['employees', 'Manage employees', 'user'], ['locations', 'Manage locations', 'map'], ['transactions', 'Record finance', 'chart']].map(([target, label, icon]) => <button key={target} className="quick-action" onClick={() => onNavigate(target)}><span className="quick-icon"><Icon name={icon} /></span><span>{label}</span><b>→</b></button>)}
+        {[['products', 'Add product', 'box'], ['employees', 'Manage employees', 'user'], ['locations', 'Manage locations', 'map'], ['transactions', 'Record finance', 'chart']].filter(([target]) => can(target)).map(([target, label, icon]) => <button key={target} className="quick-action" onClick={() => onNavigate(target)}><span className="quick-icon"><Icon name={icon} /></span><span>{label}</span><b>→</b></button>)}
       </div></section>
     </>
   )
@@ -77,13 +81,12 @@ export function Dashboard({ profile, onNavigate, onError }: { profile: Profile; 
 
 export function CompanySetup({ onCreated, onError }: { onCreated: (company: Company) => void; onError: (message: string) => void }) {
   const [name, setName] = useState('')
-  const [companyCurrency, setCompanyCurrency] = useState('MWK')
   const [busy, setBusy] = useState(false)
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setBusy(true)
     try {
-      const company = await api.request<Company>('/users/me/tenants', { method: 'POST', body: JSON.stringify({ name, currency: companyCurrency }) })
+      const company = await api.request<Company>('/users/me/tenants', { method: 'POST', body: JSON.stringify({ name }) })
       onCreated(company)
     } catch (error) {
       onError(errorMessage(error))
@@ -91,18 +94,9 @@ export function CompanySetup({ onCreated, onError }: { onCreated: (company: Comp
       setBusy(false)
     }
   }
-  return <section className="company-setup panel"><div className="eyebrow">COMPANY WORKSPACE</div><h1>Set up your company</h1><p className="page-subtitle">Create the company workspace where you’ll manage locations, employees, stock, sales, and finances.</p><form className="resource-form" onSubmit={(event) => void create(event)}><label className="field-label"><span>Company name *</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label className="field-label"><span>Operating currency</span><select value={companyCurrency} onChange={(event) => setCompanyCurrency(event.target.value)}><option value="MWK">MWK · Malawi Kwacha</option><option value="USD">USD · US Dollar</option><option value="ZAR">ZAR · South African Rand</option><option value="GBP">GBP · Pound Sterling</option><option value="EUR">EUR · Euro</option></select></label><button className="button button-primary" disabled={busy}>{busy ? 'Setting up…' : 'Create company workspace'}</button></form></section>
+  return <section className="company-setup panel"><div className="eyebrow">COMPANY WORKSPACE</div><h1>Set up your company</h1><p className="page-subtitle">Create the company workspace where you’ll manage locations, employees, stock, sales, and finances.</p><form className="resource-form" onSubmit={(event) => void create(event)}><label className="field-label"><span>Company name *</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><button className="button button-primary" disabled={busy}>{busy ? 'Setting up…' : 'Create company workspace'}</button></form></section>
 }
 
 function Metric({ label, value, note, icon, tone }: { label: string; value: string; note: string; icon: string; tone: string }) {
   return <div className="metric-card"><div className="metric-top"><span>{label}</span><span className={`metric-icon ${tone}`}><Icon name={icon} /></span></div><strong>{value}</strong><small>{note}</small></div>
-}
-
-export function iconForResource(key: string) {
-  if (key === 'orders' || key === 'transactions' || key === 'order-items' || key === 'payments') return 'bag'
-  if (key === 'products' || key === 'stock-items' || key === 'inventory-movements' || key === 'categories') return 'box'
-  if (key === 'markets' || key === 'stores' || key === 'locations') return 'map'
-  if (key === 'employees') return 'user'
-  if (key === 'roles' || key === 'permissions' || key === 'admins' || key === 'audits') return 'shield'
-  return 'layers'
 }

@@ -52,8 +52,9 @@ export function ProfilePage({ profile, initialToken, onProfileChange, onNotify, 
     setBusy(true)
     try {
       await api.request('/users/me', { method: 'DELETE' })
-      onNotify('Account deleted.')
+      api.clearSession()
       await onSignOut()
+      onNotify('Account deleted.')
     } catch (err) { onNotify(errorMessage(err), 'error') } finally { setBusy(false); setConfirmDelete(false) }
   }
   return <>
