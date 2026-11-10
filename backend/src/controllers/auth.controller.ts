@@ -20,12 +20,9 @@ interface UserRow {
 export default class AuthController {
     async register(req: Request, res: Response): Promise<void> {
         const { username, email, password, companyName } = req.body ?? {};
-        const companyCurrency = typeof req.body?.companyCurrency === 'string'
-            ? req.body.companyCurrency.toUpperCase() : 'MWK';
         if (typeof username !== 'string' || typeof email !== 'string' ||
             typeof password !== 'string' || !username.trim() || !email.trim() ||
             typeof companyName !== 'string' || !companyName.trim() || companyName.trim().length > 100 ||
-            !/^[A-Z]{3}$/.test(companyCurrency) ||
             username.trim().length > 50 || email.trim().length > 100 ||
             password.length < 8) {
             res.status(400).json({
@@ -47,8 +44,8 @@ export default class AuthController {
             const user = result.rows[0];
             if (!user) throw new Error('User insert did not return a user');
             const tenantResult = await client.query<{ id: number }>(
-                'INSERT INTO tenants (name, currency) VALUES ($1, $2) RETURNING id',
-                [companyName.trim(), companyCurrency],
+                'INSERT INTO tenants (name) VALUES ($1) RETURNING id',
+                [companyName.trim()],
             );
             const tenant = tenantResult.rows[0];
             if (!tenant) throw new Error('Company insert did not return a company');

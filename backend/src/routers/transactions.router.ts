@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { transactionsController } from '../controllers/domain.controller';
 import resourceRouter from './resource.router';
-import requireTenant from '../middleware/tenant.middleware';
+import requireTenant, { authorize } from '../middleware/tenant.middleware';
 
 const router = Router();
 router.use(requireTenant);
-router.use('/', resourceRouter(transactionsController));
+router.use('/', authorize('transactions'), resourceRouter(transactionsController));
 
 export default router;

@@ -30,26 +30,26 @@ try {
   `, [username, email.toLowerCase(), passwordHash])
 
   const tenant = await one(client, `
-    INSERT INTO tenants (name, currency) VALUES ('Northstar Market Co.', 'USD')
-    ON CONFLICT (name) DO UPDATE SET currency = EXCLUDED.currency RETURNING id
+    INSERT INTO tenants (name) VALUES ('Northstar Market Co.')
+    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id
   `)
   const tenantId = tenant.id
   await client.query('INSERT INTO user_tenants (user_id, tenant_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [user.id, tenantId])
   await client.query('INSERT INTO admins (user_id, tenant_id) VALUES ($1, $2) ON CONFLICT (user_id, tenant_id) DO NOTHING', [user.id, tenantId])
 
   const market = await one(client, `
-    INSERT INTO markets (tenant_id, name) VALUES ($1, 'Pacific Northwest')
+    INSERT INTO markets (tenant_id, name) VALUES ($1, 'Central & Southern Malawi')
     ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name RETURNING id
   `, [tenantId])
 
   const locationIds = []
   for (const location of [
-    ['Pioneer Square', '101 First Avenue', 'Seattle', 'WA', '98104', 'US', 47.6026, -122.3345],
-    ['Fremont', '3501 Fremont Avenue N', 'Seattle', 'WA', '98103', 'US', 47.6510, -122.3500],
+    ['Area 3 Market', 'Area 3 Main Road', 'Lilongwe', 'Central'],
+    ['Limbe Market', 'Livingstone Avenue, Limbe', 'Blantyre', 'Southern'],
   ]) {
     locationIds.push(await one(client, `
-      INSERT INTO locations (tenant_id, name, address_line1, city, region, postal_code, country_code, latitude, longitude)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO locations (tenant_id, name, address_line1, city, region)
+      VALUES ($1, $2, $3, $4, $5)
       ON CONFLICT (tenant_id, name) DO UPDATE SET address_line1 = EXCLUDED.address_line1
       RETURNING id
     `, [tenantId, ...location]).then((row) => row.id))
@@ -57,8 +57,8 @@ try {
 
   const stores = []
   for (const [code, name, locationId] of [
-    ['SEA-001', 'Pioneer Square Store', locationIds[0]],
-    ['SEA-002', 'Fremont Market Store', locationIds[1]],
+    ['LLW-001', 'Area 3 Store', locationIds[0]],
+    ['BLZ-001', 'Limbe Market Store', locationIds[1]],
   ]) {
     stores.push(await one(client, `
       INSERT INTO stores (tenant_id, market_id, location_id, name, store_code)
@@ -70,7 +70,7 @@ try {
 
   const employee = await one(client, `
     INSERT INTO employees (tenant_id, employee_number, first_name, last_name, job_title)
-    VALUES ($1, 'EMP-001', 'Jamie', 'Morgan', 'Store manager')
+    VALUES ($1, 'EMP-001', 'Chikondi', 'Banda', 'Store manager')
     ON CONFLICT (tenant_id, employee_number) DO UPDATE SET job_title = EXCLUDED.job_title
     RETURNING id
   `, [tenantId])
@@ -81,13 +81,39 @@ try {
     `, [employee.id, storeId, tenantId])
   }
 
+  // Demo employee logins, one per role. Staff roles limited to a store only see that store.
+  await client.query(`INSERT INTO roles (name) VALUES ('manager'), ('cashier'), ('stock_clerk'), ('accountant') ON CONFLICT (name) DO NOTHING`)
+  const staffPassword = process.env.SEED_STAFF_PASSWORD || 'Employee!2026'
+  const staffHash = await bcrypt.hash(staffPassword, 12)
+  for (const [number, first, last, title, login, role, storeIndexes] of [
+    ['EMP-002', 'Mphatso', 'Phiri', 'Cashier', 'cashier-llw', 'cashier', [0]],
+    ['EMP-003', 'Tiwonge', 'Mwale', 'Stock clerk', 'stock-llw', 'stock_clerk', [0]],
+    ['EMP-004', 'Grace', 'Kachingwe', 'Accountant', 'accounts', 'accountant', []],
+    ['EMP-005', 'Yamikani', 'Chirwa', 'Store manager', 'manager-blz', 'manager', [1]],
+  ]) {
+    const staffUser = await one(client, `
+      INSERT INTO users (username, email, password, email_verified) VALUES ($1, $2, $3, TRUE)
+      ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password RETURNING id
+    `, [login, `${login}@marketmesh.test`, staffHash])
+    await client.query('INSERT INTO user_tenants (user_id, tenant_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [staffUser.id, tenantId])
+    const staff = await one(client, `
+      INSERT INTO employees (tenant_id, user_id, employee_number, first_name, last_name, job_title)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (tenant_id, employee_number) DO UPDATE SET user_id = EXCLUDED.user_id RETURNING id
+    `, [tenantId, staffUser.id, number, first, last, title])
+    await client.query(`INSERT INTO employee_roles (employee_id, role_id) SELECT $1, id FROM roles WHERE name = $2 ON CONFLICT DO NOTHING`, [staff.id, role])
+    for (const index of storeIndexes) {
+      await client.query('INSERT INTO employee_stores (employee_id, store_id, tenant_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [staff.id, stores[index], tenantId])
+    }
+  }
+
   const catalog = [
-    ['Everyday Tote', 'Recycled cotton carryall with reinforced handles.', 24.00],
-    ['Field Notes Set', 'Three pocket notebooks made from responsibly sourced paper.', 12.50],
-    ['Ceramic Travel Mug', 'Double-wall ceramic mug with a splash-resistant lid.', 32.00],
-    ['Canvas Market Bag', 'Roomy canvas tote for weekly market runs.', 18.00],
-    ['Pour-over Kit', 'Compact dripper and reusable stainless filter.', 46.00],
-    ['Alpine Water Bottle', 'Insulated stainless steel bottle, 650 ml.', 28.00],
+    ['Everyday Tote', 'Recycled cotton carryall with reinforced handles.', 18000.00],
+    ['Field Notes Set', 'Three pocket notebooks made from responsibly sourced paper.', 9500.00],
+    ['Ceramic Travel Mug', 'Double-wall ceramic mug with a splash-resistant lid.', 24000.00],
+    ['Canvas Market Bag', 'Roomy canvas tote for weekly market runs.', 13500.00],
+    ['Pour-over Kit', 'Compact dripper and reusable stainless filter.', 35000.00],
+    ['Alpine Water Bottle', 'Insulated stainless steel bottle, 650 ml.', 21000.00],
   ]
   const products = []
   for (const [name, description, price] of catalog) {
@@ -169,6 +195,7 @@ try {
 
   await client.query('COMMIT')
   console.log(`Seeded MarketMesh demo company and data for ${username} (${email}).`)
+  console.log(`Staff logins (password "${staffPassword}"): cashier-llw, stock-llw, accounts, manager-blz`)
 } catch (error) {
   await client.query('ROLLBACK')
   console.error('Demo data seed failed. Check the database schema and DATABASE_URL.')

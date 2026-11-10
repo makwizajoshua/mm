@@ -5,20 +5,15 @@ import dbConnection from '../db/connection';
 export default class UserController {
     async createTenant(req: Request, res: Response): Promise<void> {
         const name = req.body?.name;
-        const currency = typeof req.body?.currency === 'string' ? req.body.currency.toUpperCase() : 'MWK';
         if (typeof name !== 'string' || !name.trim() || name.trim().length > 100) {
             res.status(400).json({ message: 'A company name of 1 to 100 characters is required' });
-            return;
-        }
-        if (!/^[A-Z]{3}$/.test(currency)) {
-            res.status(400).json({ message: 'Currency must be a three-letter ISO code' });
             return;
         }
         const client = await dbConnection.connect();
         try {
             await client.query('BEGIN');
-            const tenant = await client.query<{ id: number; name: string; currency: string }>(
-                'INSERT INTO tenants (name, currency) VALUES ($1, $2) RETURNING id, name, currency', [name.trim(), currency],
+            const tenant = await client.query<{ id: number; name: string }>(
+                'INSERT INTO tenants (name) VALUES ($1) RETURNING id, name', [name.trim()],
             );
             const company = tenant.rows[0];
             if (!company) throw new Error('Company insert did not return a company');
@@ -42,7 +37,7 @@ export default class UserController {
     async listTenants(req: Request, res: Response): Promise<void> {
         try {
             const result = await dbConnection.query(
-                `SELECT t.id, t.name, t.currency
+                `SELECT t.id, t.name
                  FROM tenants t
                  INNER JOIN user_tenants ut ON ut.tenant_id = t.id
                  WHERE ut.user_id = $1

@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { AuditController } from '../controllers/domain.controller';
 import resourceRouter from './resource.router';
-import requireTenant from '../middleware/tenant.middleware';
+import requireTenant, { authorize } from '../middleware/tenant.middleware';
 
 const router = Router();
 router.use(requireTenant);
-router.use('/', resourceRouter(new AuditController()));
+router.use('/', authorize('audits'), resourceRouter(new AuditController()));
 
 export default router;

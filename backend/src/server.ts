@@ -8,6 +8,7 @@ import ordersRouter from './routers/orders.router';
 import inventoryRouter from './routers/inventory.router';
 import transactionsRouter from './routers/transactions.router';
 import auditsRouter from './routers/audits.router';
+import accessRouter from './routers/access.router';
 import authenticate from './middleware/auth.middleware';
 
 dotenv.config();
@@ -18,6 +19,7 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 app.use('/api/auth', authRouter);
 
 app.use('/api/users', authenticate, usersRouter);
+app.use('/api/access', authenticate, accessRouter);
 app.use('/api', authenticate, marketRouter);
 app.use('/api', authenticate, catalogRouter);
 app.use('/api', authenticate, ordersRouter);

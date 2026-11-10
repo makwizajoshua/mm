@@ -13,6 +13,8 @@ export interface ResourceSpec {
     readOnly?: boolean;
     deletionDisabled?: boolean;
     tenantScoped?: boolean;
+    /** Column holding a store id; staff limited to certain stores only see matching rows. */
+    storeScopeColumn?: string;
 }
 
 const MAX_PAGE_SIZE = 100;
@@ -58,6 +60,11 @@ export default class ResourceController {
             values.push(req.tenantId);
             filters.push(`"tenant_id" = $${values.length}`);
         }
+        const scope = this.storeScope(req, values.length + 1);
+        if (scope) {
+            values.push(req.access!.storeIds);
+            filters.push(scope);
+        }
         const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
         const offset = (page - 1) * limit;
         try {
@@ -87,8 +94,8 @@ export default class ResourceController {
         }
         try {
             const result = await dbConnection.query(
-                `SELECT ${this.columns()} FROM "${this.spec.table}" WHERE id = $1${this.tenantClause(req, 2)}`,
-                this.spec.tenantScoped ? [id, req.tenantId] : [id],
+                `SELECT ${this.columns()} FROM "${this.spec.table}" WHERE id = $1${this.tenantClause(req, 2)}${this.storeScope(req, 3) ? ` AND ${this.storeScope(req, 3)}` : ''}`,
+                [id, ...(this.spec.tenantScoped ? [req.tenantId] : []), ...(this.storeScope(req, 3) ? [req.access!.storeIds] : [])],
             );
             if (!result.rows[0]) {
                 res.status(404).json({ message: 'Resource not found' });
@@ -227,6 +234,12 @@ export default class ResourceController {
     protected columns(): string {
         return [...new Set(['id', ...(this.spec.tenantScoped ? ['tenant_id'] : []), ...this.spec.fields, ...(this.spec.serverManagedFields ?? []), ...(this.spec.readFields ?? [])])]
             .map((field) => `"${field}"`).join(', ');
+    }
+
+    private storeScope(req: Request, parameter: number): string | null {
+        const column = this.spec.storeScopeColumn;
+        if (!column || !req.access || req.access.storeIds === null) return null;
+        return `"${column}" = ANY($${parameter}::int[])`;
     }
 
     private tenantClause(req: Request, parameter: number): string {

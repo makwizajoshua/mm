@@ -6,13 +6,20 @@ type ProductRow = { id: number; name: string; price: string };
 export default class SalesController {
     async create(req: Request, res: Response): Promise<void> {
         const tenantId = req.tenantId;
-        const { store_id: storeId, employee_id: employeeId, receipt_number: receipt, items, payments } = req.body ?? {};
+        const { store_id: storeId, employee_id: requestedEmployeeId, receipt_number: receipt, items, payments } = req.body ?? {};
         if (!tenantId || !isPositiveInteger(storeId) || typeof receipt !== 'string' || !receipt.trim() ||
             receipt.trim().length > 80 || !Array.isArray(items) || !items.length || items.length > 100 ||
             !Array.isArray(payments) || !payments.length) {
             res.status(400).json({ message: 'Store, receipt number, sale items, and payments are required' });
             return;
         }
+        const access = req.access;
+        if (access && access.storeIds !== null && !access.storeIds.includes(Number(storeId))) {
+            res.status(403).json({ message: 'You are not assigned to this store' });
+            return;
+        }
+        // Staff always sell as themselves; owners may attribute a sale to an employee.
+        const employeeId = access && !access.isAdmin && access.employee ? access.employee.id : requestedEmployeeId;
         if (employeeId !== undefined && employeeId !== null && !isPositiveInteger(employeeId)) {
             res.status(400).json({ message: 'Employee must be a positive integer' });
             return;

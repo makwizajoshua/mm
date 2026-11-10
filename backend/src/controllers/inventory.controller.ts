@@ -14,6 +14,10 @@ export default class InventoryController {
             res.status(400).json({ message: 'Store, product, non-zero quantity change, and valid movement type are required' });
             return;
         }
+        if (req.access && req.access.storeIds !== null && !req.access.storeIds.includes(Number(storeId))) {
+            res.status(403).json({ message: 'You are not assigned to this store' });
+            return;
+        }
         const delta = Number(quantityDelta);
         const mustBePositive = ['opening', 'purchase', 'return', 'transfer_in'].includes(movementType);
         const mustBeNegative = ['transfer_out', 'damage'].includes(movementType);
@@ -60,7 +64,7 @@ export default class InventoryController {
             await client.query(
                 `INSERT INTO audits (tenant_id, title, body, user_id, entity_type, entity_id, action)
                  VALUES ($1, $2, $3::jsonb, $4, 'inventory', $5, 'update')`,
-                [tenantId, 'Inventory adjusted', JSON.stringify({ store_id: Number(storeId), product_id: Number(productId), quantity_delta: delta, movement_type: movementType }), req.user.id, String(row.id)],
+                [tenantId, 'Inventory adjusted', JSON.stringify({ employee_id: req.access?.employee?.id ?? null, store_id: Number(storeId), product_id: Number(productId), quantity_delta: delta, movement_type: movementType }), req.user.id, String(row.id)],
             );
             await client.query('COMMIT');
             res.status(201).json({ store_id: Number(storeId), product_id: Number(productId), quantity: nextQuantity });

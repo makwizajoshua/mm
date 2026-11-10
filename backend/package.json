@@ -3,7 +3,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
-    "seed": "node scripts/seed.mjs"
+    "seed": "node scripts/seed.mjs",
+    "test": "node --test tests/api.test.mjs tests/access.test.mjs"
   },
   "devDependencies": {
     "tsx": "^4.23.15",

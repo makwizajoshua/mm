@@ -8,7 +8,7 @@ MarketMesh is a multi-company business operations platform. Each subscribing com
 - Searchable, sortable, paginated resource tables with create, edit, details, and delete flows.
 - Company locations, markets, stores, employees, products, categories, stock levels, financial transactions, and audit trail.
 - Sale recording that checks stock and records sale lines, payments, finance, stock movements, and an audit event atomically.
-- Company switching for users who belong to more than one workspace, with company currency formatting.
+- Company switching for users who belong to more than one workspace, with all amounts shown in Malawi Kwacha (MWK).
 - Company membership and active-company switching.
 - Registration, sign-in, refresh-token rotation, sign-out, password recovery, email verification, and profile management.
 - Responsive layouts with actionable errors, loading states, and empty states.
@@ -26,7 +26,7 @@ Requirements: Node.js 20.19+ (or 22.12+) and PostgreSQL.
 
    If your checkout has moved the schema to another path, apply that schema file instead. The schema is not automatically reset by the seed command.
 
-   For an existing database already on the previous company schema, apply `backend/src/sql/migrations/20261015_add_company_currency.sql` instead of rerunning the create-only schema. Older schemas need a separate migration or a fresh local database.
+   For an existing database already on the previous company schema, apply the SQL files in `backend/src/sql/migrations/` in date order (the latest, `20261110_malawi_only.sql`, removes per-company currency and extra location columns) instead of rerunning the create-only schema. Older schemas need a separate migration or a fresh local database.
 
 2. Configure and start the API:
 

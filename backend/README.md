@@ -2,7 +2,7 @@
 
 The API is rooted at `/api` and uses PostgreSQL. Apply `db.sql` to a fresh
 database before starting the API. For a database on the previous company schema,
-apply `src/sql/migrations/20261015_add_company_currency.sql`. Older schemas need
+apply the files in `src/sql/migrations/` in date order. Older schemas need
 their own migration or a fresh local database; do not rerun the create-only schema over existing tables.
 Each tenant is a subscribing company; operational records are always
 scoped to the selected company.
@@ -11,7 +11,7 @@ scoped to the selected company.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| POST | `/api/auth/register` | Create a user and their first company (`companyName`, optional `companyCurrency`) |
+| POST | `/api/auth/register` | Create a user and their first company (`companyName`) |
 | POST | `/api/auth/login` | Authenticate with username or email |
 | POST | `/api/auth/refresh-token` | Rotate a refresh token |
 | POST | `/api/auth/logout` | Revoke a refresh token |
@@ -28,7 +28,7 @@ company ID to reads and writes on the server. Never accept a company ID from a
 request body as authorization.
 
 Registration requires `username`, `email`, `password`, and `companyName`;
-`companyCurrency` defaults to `MWK` and must be a three-letter currency code.
+All amounts are in Malawi Kwacha (MWK); there is no per-company currency.
 
 ## Company operations
 
@@ -40,7 +40,7 @@ The standard resource endpoints support paginated `GET /`, `GET /:id`,
 | Endpoint | Purpose |
 | --- | --- |
 | `/api/markets` | Company operating regions |
-| `/api/locations` | Company addresses and geographic coordinates |
+| `/api/locations` | Company addresses (town and region) |
 | `/api/stores` | Stores assigned to company locations and optional markets |
 | `/api/employees` | Employee records and employment status |
 | `/api/products` | Company product catalog and prices |

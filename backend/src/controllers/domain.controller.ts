@@ -33,8 +33,8 @@ export const marketsController = resource({
 
 export const locationsController = resource({
     table: 'locations', tenantScoped: true,
-    fields: ['name', 'address_line1', 'address_line2', 'city', 'region', 'postal_code', 'country_code', 'latitude', 'longitude'],
-    requiredOnCreate: ['name', 'address_line1', 'city', 'country_code'],
+    fields: ['name', 'address_line1', 'city', 'region'],
+    requiredOnCreate: ['name', 'address_line1', 'city'],
     readFields: ['created_at'], searchFields: ['name', 'city', 'region'],
     sortableFields: ['id', 'name', 'city', 'region', 'created_at'],
 });
@@ -45,6 +45,7 @@ export const storesController = resource({
     requiredOnCreate: ['location_id', 'name', 'store_code'],
     readFields: ['created_at'], filterFields: ['market_id', 'location_id', 'status'],
     searchFields: ['name', 'store_code'], sortableFields: ['id', 'name', 'store_code', 'status', 'created_at'],
+    storeScopeColumn: 'id',
 });
 
 export const employeesController = resource({
@@ -74,7 +75,7 @@ export const ordersController = resource({
     requiredOnCreate: ['store_id', 'receipt_number', 'total'],
     readFields: ['created_at'], filterFields: ['store_id', 'status'],
     searchFields: ['receipt_number'], sortableFields: ['id', 'store_id', 'receipt_number', 'total', 'status', 'sold_at'],
-    readOnly: true,
+    storeScopeColumn: 'store_id', readOnly: true,
 });
 
 export const orderItemsController = resource({
@@ -90,7 +91,8 @@ export const stockItemsController = resource({
     table: 'stock_items', tenantScoped: true,
     fields: ['store_id', 'product_id', 'quantity'], requiredOnCreate: ['store_id', 'product_id', 'quantity'],
     readFields: ['created_at', 'updated_at'], filterFields: ['store_id', 'product_id'],
-    sortableFields: ['id', 'store_id', 'product_id', 'quantity', 'updated_at'], readOnly: true,
+    sortableFields: ['id', 'store_id', 'product_id', 'quantity', 'updated_at'],
+    storeScopeColumn: 'store_id', readOnly: true,
 });
 
 export const inventoryMovementsController = resource({
@@ -99,7 +101,7 @@ export const inventoryMovementsController = resource({
     requiredOnCreate: ['store_id', 'product_id', 'movement_type', 'quantity_delta'],
     readFields: [], filterFields: ['store_id', 'product_id', 'movement_type'],
     searchFields: ['note'], sortableFields: ['id', 'store_id', 'product_id', 'movement_type', 'quantity_delta', 'occurred_at'],
-    readOnly: true,
+    storeScopeColumn: 'store_id', readOnly: true,
 });
 
 export const paymentsController = resource({
@@ -131,6 +133,8 @@ class FinanceTransactionsController extends ResourceController {
             return;
         }
         req.body = { ...req.body, recorded_by_user_id: req.user.id };
+        // Staff always record entries as themselves.
+        if (req.access && !req.access.isAdmin && req.access.employee) req.body.employee_id = req.access.employee.id;
         await super.create(req, res);
     }
 }

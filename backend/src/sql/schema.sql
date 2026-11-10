@@ -21,9 +21,7 @@ CREATE TABLE roles (
 CREATE TABLE tenants (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) UNIQUE NOT NULL,
-    currency CHAR(3) NOT NULL DEFAULT 'MWK',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT tenants_currency_check CHECK (currency ~ '^[A-Z]{3}$')
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE permissions (
@@ -99,13 +97,8 @@ CREATE TABLE locations (
     tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     address_line1 VARCHAR(255) NOT NULL,
-    address_line2 VARCHAR(255),
     city VARCHAR(100) NOT NULL,
     region VARCHAR(100),
-    postal_code VARCHAR(30),
-    country_code CHAR(2) NOT NULL,
-    latitude DECIMAL(9, 6) CHECK (latitude BETWEEN -90 AND 90),
-    longitude DECIMAL(9, 6) CHECK (longitude BETWEEN -180 AND 180),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (tenant_id, name),
     UNIQUE (id, tenant_id)
@@ -159,7 +152,8 @@ CREATE TABLE categories (
     tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (tenant_id, name)
+    UNIQUE (tenant_id, name),
+    UNIQUE (id, tenant_id)
 );
 
 CREATE TABLE product_categories (
@@ -328,5 +322,9 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER stock_items_set_updated_at
 BEFORE UPDATE ON stock_items
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Employee roles used for role-based access (see src/access/permissions.ts).
+INSERT INTO roles (name) VALUES ('manager'), ('cashier'), ('stock_clerk'), ('accountant')
+ON CONFLICT (name) DO NOTHING;
 
 COMMIT;
